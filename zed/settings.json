@@ -111,7 +111,7 @@
             "reportOperatorIssue": "warning",
             "reportIncompatibleMethodOverride": "warning",
             "reportIncompatibleVariableOverride": "warning",
-            "reportPossiblyUnbound": "warning",
+            "reportPossiblyUnboundVariable": "warning",
             "reportMissingImports": "warning"
           }
         }
