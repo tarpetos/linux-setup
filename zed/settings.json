@@ -83,13 +83,37 @@
     "**/.DS_Store", "**/Thumbs.db", "**/.classpath", "**/.settings",
     "**/.idea", "**/.pytest_cache", "**/.ruff_cache", "**/__pycache__"
   ],
-  // basedpyright defaults to its strict "recommended" mode; "standard" reports real type errors
-  // without flooding every untyped library call with warnings, closer to PyCharm's inspections
+  // basedpyright tuned to behave like PyCharm's inspections: red only for real breakage,
+  // type mismatches as warnings, and no noise from Optional narrowing or dynamic attributes
   "lsp": {
     "basedpyright": {
       "settings": {
         "basedpyright.analysis": {
-          "typeCheckingMode": "standard"
+          "typeCheckingMode": "standard",
+          "diagnosticSeverityOverrides": {
+            // `__doc__.split()`, `match.group()` and the like on values typed `X | None`
+            "reportOptionalMemberAccess": "none",
+            "reportOptionalSubscript": "none",
+            "reportOptionalIterable": "none",
+            "reportOptionalCall": "none",
+            "reportOptionalOperand": "none",
+            "reportOptionalContextManager": "none",
+            // attributes set at runtime (Qt widgets, mocks, function attributes)
+            "reportAttributeAccessIssue": "none",
+            "reportFunctionMemberAccess": "none",
+            // PyCharm shows these as "Unexpected type" warnings, not errors
+            "reportArgumentType": "warning",
+            "reportCallIssue": "warning",
+            "reportAssignmentType": "warning",
+            "reportReturnType": "warning",
+            "reportIndexIssue": "warning",
+            "reportGeneralTypeIssues": "warning",
+            "reportOperatorIssue": "warning",
+            "reportIncompatibleMethodOverride": "warning",
+            "reportIncompatibleVariableOverride": "warning",
+            "reportPossiblyUnbound": "warning",
+            "reportMissingImports": "warning"
+          }
         }
       }
     }
