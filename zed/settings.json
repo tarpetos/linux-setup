@@ -83,6 +83,17 @@
     "**/.DS_Store", "**/Thumbs.db", "**/.classpath", "**/.settings",
     "**/.idea", "**/.pytest_cache", "**/.ruff_cache", "**/__pycache__"
   ],
+  // basedpyright defaults to its strict "recommended" mode; "standard" reports real type errors
+  // without flooding every untyped library call with warnings, closer to PyCharm's inspections
+  "lsp": {
+    "basedpyright": {
+      "settings": {
+        "basedpyright.analysis": {
+          "typeCheckingMode": "standard"
+        }
+      }
+    }
+  },
   "preferred_line_length": 120,
   "wrap_guides": [120],
 
