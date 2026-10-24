@@ -39,6 +39,8 @@
     }
   },
   "base_keymap": "JetBrains",
+  // Reopen the projects from the last session, like PyCharm
+  "restore_on_startup": "last_session",
 
   // PyCharm-like look
   "auto_install_extensions": {
@@ -89,7 +91,9 @@
     "font_size": 13,
     "line_height": "standard",
     // keep black text black on colored prompt segments, like PyCharm
-    "minimum_contrast": 0
+    "minimum_contrast": 0,
+    // .venv is activated by auto-venv.zsh; Zed's own activation would run it twice
+    "detect_venv": "off"
   },
 
   // Windows only: terminal opens the default WSL distro
@@ -97,9 +101,7 @@
     "terminal": {
       "shell": {
         "program": "wsl.exe"
-      },
-      // venv is auto-activated by ~/.zshrc inside WSL; Zed's Windows-side detection would send a bad path
-      "detect_venv": "off"
+      }
     }
   }
 }
