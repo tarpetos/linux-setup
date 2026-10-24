@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"
 
 SETUP_BASE=1
 SETUP_ZED=0
+SETUP_MOUSE_FIX=0
+SETUP_SLEEP_FIX=0
 
 SUMMARY_INSTALLED=()
 SUMMARY_FAILED=()
@@ -35,9 +37,12 @@ usage() {
 Usage: run.sh [options]
 
 Options:
-  --zed        Also set up Zed with the PyCharm-like config from zed/
-  --zed-only   Set up only Zed, skip the base setup
-  -h, --help   Show this help
+  --zed               Also set up Zed with the PyCharm-like config from zed/
+  --mouse-scroll-fix  Also install a service that drops jumpy mouse wheel scrolls
+  --sleep-fix         Also install a service that stops the PC waking up right after sleep
+  --skip-base         Skip the base setup, run only the options above
+  --zed-only          Same as --zed --skip-base
+  -h, --help          Show this help
 EOF
 }
 
@@ -45,6 +50,9 @@ parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --zed) SETUP_ZED=1 ;;
+            --mouse-scroll-fix) SETUP_MOUSE_FIX=1 ;;
+            --sleep-fix) SETUP_SLEEP_FIX=1 ;;
+            --skip-base) SETUP_BASE=0 ;;
             --zed-only) SETUP_ZED=1; SETUP_BASE=0 ;;
             -h|--help) usage; exit 0 ;;
             *) log_error "Unknown option: $1"; usage; exit 1 ;;
@@ -55,6 +63,32 @@ parse_args() {
 
 is_wsl() {
     grep -qi microsoft /proc/version 2>/dev/null
+}
+
+# Prints a local directory holding the given files from a repository directory.
+# Running through curl leaves no repository on disk, so the files are downloaded.
+repo_files() {
+    local dir="$1"
+    shift
+    if [ -f "$SCRIPT_DIR/$dir/$1" ]; then
+        echo "$SCRIPT_DIR/$dir"
+        return
+    fi
+    local tmp file
+    tmp="$(mktemp -d)"
+    for file in "$@"; do
+        curl -fsSL "$REPO_RAW_URL/$dir/$file" -o "$tmp/$file" || return 1
+    done
+    echo "$tmp"
+}
+
+# Installs a root-owned file; fails when the installed file is already identical
+install_system_file() {
+    local src="$1" dest="$2" mode="$3"
+    if sudo cmp -s "$src" "$dest"; then
+        return 1
+    fi
+    sudo install -m "$mode" "$src" "$dest"
 }
 
 prepare_sudo() {
@@ -262,17 +296,7 @@ configure_zshrc() {
 }
 
 fetch_zed_config() {
-    if [ -f "$SCRIPT_DIR/zed/settings.json" ]; then
-        ZED_SRC="$SCRIPT_DIR/zed"
-        return
-    fi
-    # Running through curl, so the repository files are not on disk
-    log_info "Downloading Zed config..."
-    ZED_SRC="$(mktemp -d)"
-    local file
-    for file in settings.json auto-venv.zsh install-windows.ps1; do
-        curl -fsSL "$REPO_RAW_URL/zed/$file" -o "$ZED_SRC/$file"
-    done
+    ZED_SRC="$(repo_files zed settings.json auto-venv.zsh install-windows.ps1)"
 }
 
 install_venv_hook() {
@@ -375,6 +399,51 @@ setup_zed() {
     fi
 }
 
+# Installs a script to /usr/local/bin with its systemd service, then enables the service
+install_service_fix() {
+    local name="$1" dir="$2" script="$3" service="$4"
+    log_info "Setting up the $name..."
+    if is_wsl; then
+        log_info "Skipping the $name: it fixes hardware, which WSL does not manage."
+        return
+    fi
+
+    local src changed=0 existed=0
+    src="$(repo_files "$dir" "$script" "$service")"
+    [ -f "/etc/systemd/system/$service" ] && existed=1
+    install_system_file "$src/$script" "/usr/local/bin/$script" 755 && changed=1
+    install_system_file "$src/$service" "/etc/systemd/system/$service" 644 && changed=1
+
+    if [ "$changed" -eq 0 ]; then
+        sudo systemctl enable "$service"
+        log_success "The $name is already up to date."
+        SUMMARY_UP_TO_DATE+=("${name^}")
+        return
+    fi
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$service"
+    sudo systemctl restart "$service"
+    log_success "The $name is installed. Check it with: systemctl status $service"
+    if [ "$existed" -eq 1 ]; then
+        SUMMARY_UPDATED+=("${name^}")
+    else
+        SUMMARY_INSTALLED+=("${name^}")
+    fi
+}
+
+install_mouse_scroll_fix() {
+    if ! is_wsl && ! dpkg -s python3-evdev >/dev/null 2>&1; then
+        log_info "Installing python3-evdev..."
+        sudo apt-get install -y python3-evdev || { sudo apt-get update -y && sudo apt-get install -y python3-evdev; }
+    fi
+    install_service_fix "mouse scroll wheel fix" mouse-scroll-fix mouse-scroll-fix.py mouse-scroll-fix.service
+}
+
+install_sleep_fix() {
+    install_service_fix "sleep fix" sleep-fix disable-wake.sh disable-acpi-wake.service
+}
+
 print_summary() {
     echo ""
     echo -e "\e[1m==================================================\e[0m"
@@ -411,8 +480,11 @@ print_summary() {
 main() {
     parse_args "$@"
 
-    if [ "$SETUP_BASE" -eq 1 ]; then
+    if [ "$SETUP_BASE" -eq 1 ] || [ "$SETUP_MOUSE_FIX" -eq 1 ] || [ "$SETUP_SLEEP_FIX" -eq 1 ]; then
         prepare_sudo
+    fi
+
+    if [ "$SETUP_BASE" -eq 1 ]; then
         install_dependencies
         install_zsh
         install_oh_my_zsh
@@ -424,6 +496,14 @@ main() {
 
     if [ "$SETUP_ZED" -eq 1 ]; then
         setup_zed
+    fi
+
+    if [ "$SETUP_MOUSE_FIX" -eq 1 ]; then
+        install_mouse_scroll_fix
+    fi
+
+    if [ "$SETUP_SLEEP_FIX" -eq 1 ]; then
+        install_sleep_fix
     fi
 
     print_summary

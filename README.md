@@ -14,6 +14,7 @@ This is an automated, idempotent monolith setup script for initializing a fresh 
 - **Clean History**: Automatically disables Unix epoch timestamps in `~/.zsh_history` to keep the history file clean and human-readable.
 - **UV & Python**: Installs or updates `uv`, the fast Python package installer and resolver. Also uses `uv` to automatically download and build complete, isolated distributions of **Python 3.13** and **Python 3.14** with all system dependencies natively installed.
 - **Zed (optional)**: with `--zed`, sets up the [Zed](https://zed.dev) editor to look and behave like PyCharm. See [Zed setup](#zed-setup).
+- **Hardware fixes (optional)**: with `--mouse-scroll-fix` and `--sleep-fix`, installs services for a jumpy mouse wheel and for a PC that wakes up right after going to sleep. See [Hardware fixes](#hardware-fixes).
 - **Summary Dashboard**: Displays a beautiful delta summary at the end of the script detailing what was installed, updated, failed, or already up-to-date.
 
 ---
@@ -34,14 +35,19 @@ chmod +x run.sh
 ### Options
 | Option | Description |
 | --- | --- |
-| `--zed` | Run the base setup, then set up Zed |
-| `--zed-only` | Set up only Zed, skip the base setup |
+| `--zed` | Also set up Zed |
+| `--mouse-scroll-fix` | Also install the mouse scroll wheel fix |
+| `--sleep-fix` | Also install the sleep fix |
+| `--skip-base` | Skip the base setup, run only the options above |
+| `--zed-only` | Same as `--zed --skip-base` |
 | `-h`, `--help` | Show usage |
 
 Pass options after `_` when running through `curl`:
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tarpetos/linux-setup/master/run.sh)" _ --zed
 ```
+
+Options combine, for example `./run.sh --skip-base --mouse-scroll-fix --sleep-fix` installs only the two fixes.
 
 ---
 
@@ -71,3 +77,45 @@ What `--zed` does:
 An existing `settings.json` is backed up to `settings.json.bak_<timestamp>` before it is replaced. Remote connections that Zed saved there (`ssh_connections`, `wsl_connections`) are kept.
 
 On Windows, open WSL projects through **Open Remote → WSL** rather than `\\wsl.localhost` paths. Zed then runs git, file watching and the Python language server inside Linux, where they can use the project's `.venv`.
+
+---
+
+## Hardware fixes
+Both fixes install a script to `/usr/local/bin` and a systemd service that runs it, then enable the service. Running them again updates changed files and restarts the service. They are skipped under WSL.
+
+### Mouse scroll wheel fix
+Files: [`mouse-scroll-fix/`](mouse-scroll-fix)
+
+Fixes a worn or dirty scroll wheel that sometimes registers a scroll in the opposite direction. The service installs `python3-evdev`, grabs every physical mouse, and passes its events through a virtual copy. A wheel event in the opposite direction within 150 ms of the last scroll is treated as a bounce and dropped.
+
+Check it with:
+```bash
+systemctl status mouse-scroll-fix.service
+```
+
+If it drops intentional quick direction changes, or the jumps still happen, change `DEBOUNCE_TIME = 0.15` in `/usr/local/bin/mouse-scroll-fix.py` (lower is less aggressive) and restart it:
+```bash
+sudo systemctl restart mouse-scroll-fix.service
+```
+
+Uninstall:
+```bash
+sudo systemctl disable --now mouse-scroll-fix.service
+sudo rm /etc/systemd/system/mouse-scroll-fix.service /usr/local/bin/mouse-scroll-fix.py
+sudo systemctl daemon-reload
+```
+
+### Sleep fix
+Files: [`sleep-fix/`](sleep-fix)
+
+Fixes a PC that wakes up immediately after going to sleep. At boot, the service disables ACPI wakeup for PCIe bridges, the GPU and Ethernet, and leaves USB enabled so the mouse and keyboard can still wake the PC.
+
+The device names (`GP12 GPP0 GPP8 PT24 PT29`) come from one specific AMD motherboard. On other hardware, compare them with `cat /proc/acpi/wakeup` and edit the list in `/usr/local/bin/disable-wake.sh`.
+
+Uninstall:
+```bash
+sudo systemctl disable disable-acpi-wake.service
+sudo rm /etc/systemd/system/disable-acpi-wake.service /usr/local/bin/disable-wake.sh
+sudo systemctl daemon-reload
+```
+The disabled wakeups come back after the next reboot.

@@ -1,0 +1,12 @@
+[Unit]
+Description=Mouse Scroll Wheel Debounce Fix
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mouse-scroll-fix.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Disable ACPI Wakeups at Boot
+After=basic.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/disable-wake.sh
+
+[Install]
+WantedBy=multi-user.target
