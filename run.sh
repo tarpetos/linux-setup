@@ -3,6 +3,11 @@ set -e
 
 ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
 NEEDS_RESTART=0
+REPO_RAW_URL="https://raw.githubusercontent.com/tarpetos/linux-setup/master"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"
+
+SETUP_BASE=1
+SETUP_ZED=0
 
 SUMMARY_INSTALLED=()
 SUMMARY_FAILED=()
@@ -23,6 +28,33 @@ log_error() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+usage() {
+    cat <<EOF
+Usage: run.sh [options]
+
+Options:
+  --zed        Also set up Zed with the PyCharm-like config from zed/
+  --zed-only   Set up only Zed, skip the base setup
+  -h, --help   Show this help
+EOF
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --zed) SETUP_ZED=1 ;;
+            --zed-only) SETUP_ZED=1; SETUP_BASE=0 ;;
+            -h|--help) usage; exit 0 ;;
+            *) log_error "Unknown option: $1"; usage; exit 1 ;;
+        esac
+        shift
+    done
+}
+
+is_wsl() {
+    grep -qi microsoft /proc/version 2>/dev/null
 }
 
 prepare_sudo() {
@@ -229,6 +261,120 @@ configure_zshrc() {
     log_success ".zshrc configured."
 }
 
+fetch_zed_config() {
+    if [ -f "$SCRIPT_DIR/zed/settings.json" ]; then
+        ZED_SRC="$SCRIPT_DIR/zed"
+        return
+    fi
+    # Running through curl, so the repository files are not on disk
+    log_info "Downloading Zed config..."
+    ZED_SRC="$(mktemp -d)"
+    local file
+    for file in settings.json auto-venv.zsh install-windows.ps1; do
+        curl -fsSL "$REPO_RAW_URL/zed/$file" -o "$ZED_SRC/$file"
+    done
+}
+
+install_venv_hook() {
+    log_info "Installing .venv auto-activation hook..."
+    local dest="$HOME/.config/zsh/auto-venv.zsh"
+    local line='source "$HOME/.config/zsh/auto-venv.zsh"'
+    local changed=0
+
+    mkdir -p "$(dirname "$dest")"
+    if ! cmp -s "$ZED_SRC/auto-venv.zsh" "$dest"; then
+        cp "$ZED_SRC/auto-venv.zsh" "$dest"
+        changed=1
+    fi
+    if ! grep -qF "$line" "$HOME/.zshrc" 2>/dev/null; then
+        printf '\n%s\n' "$line" >> "$HOME/.zshrc"
+        changed=1
+    fi
+
+    if [ "$changed" -eq 1 ]; then
+        SUMMARY_UPDATED+=(".venv auto-activation hook")
+        NEEDS_RESTART=1
+    else
+        SUMMARY_UP_TO_DATE+=(".venv auto-activation hook")
+    fi
+}
+
+install_zed_fonts() {
+    log_info "Checking for JetBrains Mono and Inter fonts..."
+    if fc-list : family | grep -q "^JetBrains Mono" && fc-list : family | grep -q "^Inter"; then
+        log_success "Fonts are already installed."
+        SUMMARY_UP_TO_DATE+=("JetBrains Mono & Inter fonts")
+        return
+    fi
+
+    if ! command_exists unzip; then
+        sudo apt-get install -y unzip
+    fi
+    local tmp font_dir="$HOME/.local/share/fonts"
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/jbm.zip" https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
+    curl -fsSL -o "$tmp/inter.zip" https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+    unzip -qo "$tmp/jbm.zip" -d "$tmp/jbm"
+    unzip -qo "$tmp/inter.zip" -d "$tmp/inter"
+    mkdir -p "$font_dir"
+    cp "$tmp"/jbm/fonts/ttf/JetBrainsMono-*.ttf "$tmp"/inter/extras/ttf/Inter-*.ttf "$font_dir/"
+    rm -rf "$tmp"
+    fc-cache -f "$font_dir" >/dev/null
+    log_success "Fonts installed to $font_dir."
+    SUMMARY_INSTALLED+=("JetBrains Mono & Inter fonts")
+}
+
+install_zed_settings() {
+    log_info "Configuring Zed settings..."
+    local dir="$HOME/.config/zed" merged
+    merged="$(mktemp)"
+    # Keep the remote connections Zed saves into settings.json
+    {
+        sed -n '1,/^{$/p' "$ZED_SRC/settings.json"
+        if [ -f "$dir/settings.json" ]; then
+            awk '/^  "(ssh|wsl)_connections": \[/ { keep = 1 }
+                 keep { if ($0 == "  ]") $0 = "  ],"; print }
+                 keep && /^  \],?$/ { keep = 0 }' "$dir/settings.json"
+        fi
+        sed '1,/^{$/d' "$ZED_SRC/settings.json"
+    } > "$merged"
+
+    if cmp -s "$merged" "$dir/settings.json"; then
+        rm -f "$merged"
+        log_success "Zed settings are already up to date."
+        SUMMARY_UP_TO_DATE+=("Zed settings")
+        return
+    fi
+
+    mkdir -p "$dir"
+    if [ -f "$dir/settings.json" ]; then
+        log_info "Backing up existing Zed settings to settings.json.bak_$(date +%s)..."
+        cp "$dir/settings.json" "$dir/settings.json.bak_$(date +%s)"
+    fi
+    mv "$merged" "$dir/settings.json"
+    log_success "Zed settings configured."
+    SUMMARY_UPDATED+=("Zed settings")
+}
+
+setup_zed() {
+    fetch_zed_config
+    install_venv_hook
+
+    if is_wsl; then
+        # Zed runs on Windows and opens projects in WSL, so configure the Windows side
+        log_info "WSL detected. Configuring Zed on Windows..."
+        if powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$ZED_SRC/install-windows.ps1")"; then
+            SUMMARY_UPDATED+=("Zed on Windows (settings, fonts, git for WSL)")
+        else
+            log_error "Configuring Zed on Windows failed."
+            SUMMARY_FAILED+=("Zed on Windows")
+        fi
+    else
+        install_zed_fonts
+        install_zed_settings
+    fi
+}
+
 print_summary() {
     echo ""
     echo -e "\e[1m==================================================\e[0m"
@@ -263,15 +409,23 @@ print_summary() {
 }
 
 main() {
-    prepare_sudo
-    install_dependencies
-    install_zsh
-    install_oh_my_zsh
-    install_zsh_plugins
-    configure_zshrc
-    install_uv
-    install_python_versions
-    
+    parse_args "$@"
+
+    if [ "$SETUP_BASE" -eq 1 ]; then
+        prepare_sudo
+        install_dependencies
+        install_zsh
+        install_oh_my_zsh
+        install_zsh_plugins
+        configure_zshrc
+        install_uv
+        install_python_versions
+    fi
+
+    if [ "$SETUP_ZED" -eq 1 ]; then
+        setup_zed
+    fi
+
     print_summary
     
     if [ "$NEEDS_RESTART" -eq 1 ]; then
